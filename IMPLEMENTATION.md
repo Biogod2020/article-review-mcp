@@ -1,41 +1,102 @@
-# Implemented system
+# Implemented architecture
 
-`article-review-mcp` is an article-edit review control plane rather than an LLM provider. The external agent proposes text; the MCP server owns deterministic diffing, versioned review state, visualization, human decisions, comments, and safe final assembly.
+`article-review-mcp` is a patch-review control plane rather than an LLM provider.
 
-## Architecture
+## Primary data flow
 
 ```text
-Writing agent
-    │ article_review_create / update_proposal
+Editing agent
+    │ unchanged base + PatchSet + categorized comments
     ▼
-MCP stdio server ───── ui://article-review/review.html
-    │                               │
-    │                       split/unified/final UI
-    │                               │
-    ├── lossless diff               ├── accept/reject/edit
-    ├── JSON persistence            ├── comments
-    ├── version + idempotency        └── keyboard navigation
-    └── safe final assembly
+Patch validation
+    ├── base SHA-256
+    ├── exact anchor resolution
+    ├── context disambiguation
+    ├── topic validation
+    └── overlap rejection
+    ▼
+Canonical patch round
+    ├── server-derived offsets
+    ├── derived proposal document
+    ├── lossless raw segments
+    └── proposal-rationale comments
+    ▼
+MCP App / localhost viewer
+    ├── topic tabs
+    ├── dim or hide unrelated patches
+    ├── split / unified / final views
+    ├── accept / reject / edit
+    └── review comments / replies / resolution
+    ▼
+Deterministic final assembly
 ```
 
-A localhost HTTP viewer uses the same service and UI for clients that do not render MCP Apps.
+## Core invariants
 
-## Important properties
-
-- Base and proposal are reconstructed from raw segments byte-for-byte.
+- The immutable base is the coordinate system for every patch.
+- Every patch carries at least one categorized comment.
+- Every comment has one primary topic.
+- The server derives the proposal by applying validated patches.
+- The base and proposal are reconstructed byte-for-byte from raw segments.
 - CRLF, whitespace, Chinese, English, Markdown, and basic LaTeX are not normalized.
-- The UI renders article content only as text nodes.
-- MCP App linkage uses `_meta.ui.resourceUri` and `text/html;profile=mcp-app`.
-- Review writes are serialized per session and guarded with `expectedVersion` and `idempotencyKey`.
-- Workspace paths reject absolute paths, `..` traversal, and directory symlink escape.
-- Source overwrite is disabled by default and requires confirmation, SHA-256 validation, and backup.
+- Patch conflicts are rejected instead of heuristically merged.
+- Exact unchanged patches may carry decisions and human comments across revision rounds.
+- Changed patches reset to pending.
+
+## Storage
+
+Sessions are stored under:
+
+```text
+.article-review/sessions/<session-id>.json
+```
+
+Review mutations are serialized per session and protected by:
+
+```text
+expectedVersion
+idempotencyKey
+```
+
+## UI security
+
+- Manuscript and comment content use text nodes and `textContent`.
+- Bootstrap JSON escapes `<` to prevent closing the script element.
+- The MCP App declares no external network or resource domains.
+- The localhost viewer uses a restrictive CSP and token authentication.
+
+## File security
+
+- Reads and writes are confined to the configured workspace.
+- Absolute paths and `..` traversal are rejected.
+- Directory symlink escape is rejected after `realpath` resolution.
+- New output files are not overwritten.
+- Source overwrite requires confirmation, SHA-256 verification, and backup.
+
+## Compatibility
+
+Version 1.1 makes `article_review_submit_patchset` the primary workflow. The version 1.0 full-document tools remain as deprecated aliases so existing integrations continue to function while migrating.
 
 ## Verification
-
-Run:
 
 ```bash
 npm run check
 ```
 
-The test suite includes a real stdio JSON-RPC exchange that initializes the MCP server, lists tools, creates a review, accepts a hunk through an app-only tool, and reads the MCP App resource. It also exercises the localhost viewer and mutating HTTP API.
+The suite covers:
+
+- all four patch operations
+- exact base/proposal reconstruction
+- ambiguous anchors and context disambiguation
+- base-hash mismatch
+- overlap rejection
+- required comments and topic validation
+- topic-filtered pages and feedback
+- decisions, manual edits, concurrency, and idempotency
+- comment replies and resolution
+- revision-round carry-over
+- legacy compatibility
+- traversal and symlink escape
+- XSS-safe self-contained MCP App
+- localhost viewer
+- real stdio MCP JSON-RPC flow
